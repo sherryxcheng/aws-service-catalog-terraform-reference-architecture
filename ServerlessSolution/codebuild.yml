@@ -1,0 +1,72 @@
+Resources:
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action: 'sts:AssumeRole'
+  CodeBuildRolePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyName: ProdCodeBuildRolePolicy
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Resource:
+              - !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+            Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+          - Effect: Allow
+            Resource:
+              - '*'
+            Action:
+              - 'codebuild:BatchGet*'
+              - 'codebuild:CreateReport*'
+              - 'codebuild:List*'
+              - 'codebuild:UpdateReport*'
+      Roles:
+        - !Ref CodeBuildRole
+  CodeBuildProject:
+    Type: 'AWS::CodeBuild::Project'
+    Properties:
+      Source:
+        Type: NO_SOURCE
+        BuildSpec: |
+          version: 0.2
+          run-as: root
+          phases:
+            install:
+              commands:
+                - curl -o /tmp/terraform.zip https://releases.hashicorp.com/terraform/0.13.5/terraform_0.13.5_linux_amd64.zip
+                - unzip /tmp/terraform.zip -d /usr/bin/
+            build:
+              commands:
+                - echo "Starting executing the terraform code."
+                - wget https://raw.githubusercontent.com/sherryxcheng/aws-service-catalog-terraform-reference-architecture/serverless/ServiceCatalogSamples/sc-sample-S3.tf
+                - terraform init
+                - if [ "${tf_action}" = "destroy" ];then terraform plan ${tf_opts} -destroy -out .plan.tfplan;else terraform plan ${tf_opts} -out .plan.tfplan;fi
+                - terraform apply .plan.tfplan
+                - terraform output |tee /tmp/tf_output.txt
+            post_build:
+              commands:
+                - wget https://raw.githubusercontent.com/sherryxcheng/aws-service-catalog-terraform-reference-architecture/serverless/ServerlessSolution/servicecatalog_responder.py
+                - python3 servicecatalog_responder.py
+
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Name: execute-terraform-templates
+      Description: execute terraform example code
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+      TimeoutInMinutes: 5

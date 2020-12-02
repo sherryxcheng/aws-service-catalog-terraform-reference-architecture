@@ -1,0 +1,203 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Reusable serivce catalog product resources"
+Resources:
+  #Launch role
+  LaunchRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - servicecatalog.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  LaunchPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Roles:
+       - !Ref LaunchRole
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Action:
+              - cloudformation:CreateStack
+              - cloudformation:DeleteStack
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStacks
+              - cloudformation:GetTemplateSummary
+              - cloudformation:SetStackPolicy
+              - cloudformation:ValidateTemplate
+              - cloudformation:UpdateStack
+              - cloudformation:CreateChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DescribeChangeSet
+            Resource: "*"
+          - Effect: "Allow"
+            Action:
+              - s3:GetObject
+            Resource:
+              - "arn:aws:s3:::sc-*"
+          - Effect: "Allow"
+            Action:
+              - iam:PassRole
+            Resource:
+              - !GetAtt LambdaTriggerRole.Arn
+          - Effect: "Allow"
+            Action:
+              - sts:AssumeRole
+            Resource:
+              - "arn:aws:iam::*:role/terraform_codebuild_trigger_for_sharedservice"
+          - Effect: "Allow"
+            Action:
+              - lambda:InvokeFunction
+            Resource:
+              - !GetAtt LambdaTriggerFunction.Arn
+  LambdaTriggerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2008-10-17
+        Statement:
+          - 
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Description: Trigger AWS CodeBuild to execute Terraform
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      MaxSessionDuration: 3600
+      Path: /sc/lambda/
+      Policies:
+        -
+          PolicyName: LambdaTrigger
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - cloudformation:DescribeStacks
+                Resource: '*'
+  LambdaTriggerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaTriggerLogGroup
+    Properties:
+      Code:
+        ZipFile: |
+          import os
+          import json
+          import boto3
+          import cfnresponse
+          import traceback
+
+          def get_sc_instance_info(event):
+            cfn_client = boto3.client('cloudformation')
+            stack_id = event['StackId']
+            stack_info = cfn_client.describe_stacks(
+              StackName=stack_id
+            )['Stacks'][0]
+            
+            return stack_info
+
+
+          def get_sc_instance_name(tags):
+            for tag in tags:
+              if tag['Key'] == 'aws:servicecatalog:provisionedProductArn':
+                sc_name = tag['Value'].split('/')[1]
+                
+            if len(sc_name) > 0:
+              return sc_name
+            else:
+              raise Exception('Failed gate ServiceCatalog provisioned product name!')
+
+
+          def lambda_handler(event, context):
+            try:
+              print(event)
+              physical_resource_id = event['StackId'] + event['ResourceType']
+              responseData = {}
+              
+              # respond okay if a rollback
+              cfn_instance_info = get_sc_instance_info(event)
+              if 'ROLLBACK_IN_PROGRESS' in cfn_instance_info['StackStatus']:
+                print('Skipping CodeBuild triggering for a rollback event!')
+                cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData, physicalResourceId=physical_resource_id)
+                return
+
+              evoke_action = event['RequestType']
+              if evoke_action.upper() == 'DELETE':
+                tf_action = 'destroy'
+              else:
+                tf_action = 'apply'
+
+              # parse tfvars from json string
+              evoke_vars = event['ResourceProperties']
+              if 'TFVARS' in evoke_vars:
+                evoke_tfvars = evoke_vars['TFVARS']
+                tf_opts = str()
+                for key, value in evoke_tfvars.items():
+                  tf_opts += f'-var {key}={value} '
+
+              # trigger codebuild
+              if 'CodeBuildName' in evoke_vars:
+                  project = evoke_vars['CodeBuildName']
+                  provisioned_product_name = get_sc_instance_name(cfn_instance_info['Tags'])
+                  codebuild_client = boto3.client('codebuild')
+                  response = codebuild_client.start_build(
+                      projectName=project,
+                      environmentVariablesOverride=[
+                        {
+                          'name': 'tf_opts',
+                          'value': tf_opts,
+                          'type': 'PLAINTEXT'
+                        },
+                        {
+                          'name': 'event',
+                          'value': json.dumps(event),
+                          'type': 'PLAINTEXT'
+                        },
+                        {
+                          'name': 'tf_action',
+                          'value': tf_action,
+                          'type': 'PLAINTEXT'
+                        }
+                      ]
+                  )
+            except:
+              responseData['FailedAt'] = event['ServiceToken']
+              cfnresponse.send(event, context, cfnresponse.FAILED, responseData, physicalResourceId=physical_resource_id, noEcho=True)
+              traceback.print_exc()
+      Handler: index.lambda_handler
+      Description: "Trigger CodeBuild to execute Terraform"
+      MemorySize: 128
+      Role: !GetAtt LambdaTriggerRole.Arn
+      Runtime: python3.7
+      Timeout: 10
+      FunctionName: TriggerCodeBuildForTerraform
+  LambdaTriggerPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref LambdaTriggerFunction
+      Principal: cloudformation.amazonaws.com
+  LambdaTriggerLogGroup:
+       Type: AWS::Logs::LogGroup
+       Properties:
+        LogGroupName: /aws/lambda/TriggerCodeBuildForTerraform
+        RetentionInDays: 30
+Outputs:
+  LaunchRoleArn:
+    Description: The Launch role will be used to launch the Service Catalog Product
+    Value: !GetAtt LaunchRole.Arn
+    Export:
+      Name: SCPoCLaunchRoleArn
+  LambdaTriggerFunctionArn:
+    Description: The custom resource lambda function arn
+    Value: !GetAtt LambdaTriggerFunction.Arn
+    Export:
+      Name: SCCodeBuildTriggerFuntionArn

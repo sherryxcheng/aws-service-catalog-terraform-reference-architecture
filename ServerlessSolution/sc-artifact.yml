@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "Service Catalog trigger Terraform"
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - 
+        Label:
+          default: TF Vars
+        Parameters:
+          - TFVarS3BucketName
+          - TFVarDeploymentRegion
+      - 
+        Label:
+          default: Functional
+        Parameters:
+          - CodeBuildName
+    ParameterLabels:
+      TFVarS3BucketName:
+        default: Name of the s3 bucket to deploy
+      TFVarDeploymentRegion:
+        default: The region of the s3 bucket and object to be in
+Parameters:
+  TFVarS3BucketName:
+    Description: bucket_name
+    Type: String
+  TFVarDeploymentRegion:
+    Description: aws_region
+    Type: String
+  CodeBuildName:
+    Type: String
+    Description: Name of the codebuild project
+    Default: execute-terraform-templates
+Resources:
+  # All parameters specified in the template that begins with TFVar, case incensitive, will get passed in as TFVARS variable if TFVARS is ommited.
+  SCTerraformExecutor:
+    Type: Custom::SCTerraformExecutor
+    Properties:
+      ServiceToken: !ImportValue SCCodeBuildTriggerFuntionArn
+      CodeBuildName: !Ref CodeBuildName
+      TFVARS:
+        bucket_name: !Ref TFVarS3BucketName
+        aws_region: !Ref TFVarDeploymentRegion
+Outputs:
+  TerraformOutputs:
+    Description: This the output from terraform execution
+    Value: !GetAtt SCTerraformExecutor.TF_OUTPUT

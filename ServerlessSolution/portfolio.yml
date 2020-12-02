@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Portfolio for Service Catalog.
+Metadata:
+  "AWS::CloudFormation::Interface":
+    ParameterGroups:
+      - 
+        Label:
+          default: Portfolio Information
+        Parameters:
+          - PorfolioName
+          - PortfolioProvider
+          - PorfolioDescription
+      - 
+        Label:
+          default: IAM Settings
+        Parameters:
+          - EndUserRole
+      - 
+        Label:
+          default: Product Settings
+        Parameters:
+          - RepoRootURL
+Parameters:
+  PortfolioProvider:
+    Type: String
+    Description: Provider Name
+    Default: The Clearing House Service Catalog POC
+  PorfolioName:
+    Type: String
+    Description: Portfolio Name
+    Default: Service Catalog POC Portfolio
+  PorfolioDescription:
+    Type: String
+    Description: Portfolio Description
+    Default: Service Catalog Portfolio to build Terraform on CodeBuild POC.
+  EndUserRole:
+    Type: String
+    Description: The name of a role which can execute products in this portfolio.
+  RepoRootURL:
+    Type: String
+    Description: Root url for the repo containing the product templates.
+Resources:
+  SCportfolio:
+    Type: AWS::ServiceCatalog::Portfolio
+    Properties:
+      ProviderName: !Ref PortfolioProvider
+      Description: !Ref PorfolioDescription
+      DisplayName: !Ref PorfolioName
+  LinkedEndUserRole:
+    Type: AWS::ServiceCatalog::PortfolioPrincipalAssociation
+    Properties:
+      PrincipalARN: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${EndUserRole}
+      PortfolioId: !Ref SCportfolio
+      PrincipalType: IAM
+  PocProduct:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${RepoRootURL}/product.yml"
+      TimeoutInMinutes: 5
+      Parameters:
+        PortfolioProvider: !Ref PortfolioProvider
+        PortfolioId: !Ref SCportfolio
+        RepoRootURL: !Ref RepoRootURL

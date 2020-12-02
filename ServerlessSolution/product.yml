@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: ServiceCatalog product.
+Parameters:
+  PortfolioProvider:
+    Type: String
+    Description: Owner and Distributor Name
+  PortfolioId:
+    Type: String
+    Description: The ServiceCatalog portfolio this product will be attached to.
+  RepoRootURL:
+    Type: String
+    Description: Root url for the s3 bucket containing the product templates.
+Resources:
+  ScProduct:
+    DependsOn: StaticResources
+    Type: AWS::ServiceCatalog::CloudFormationProduct
+    Properties:
+      Name: Terreform CodeBuild POC
+      Description: This product builds deploy terrafrom code through codebuild
+      Owner: !Ref PortfolioProvider
+      Distributor: !Ref PortfolioProvider
+      SupportDescription: Terreform and CodeBuild POC
+      SupportEmail: support@theclearinghouse.org
+      AcceptLanguage: en
+      ProvisioningArtifactParameters:
+        -
+          Description: poc
+          DisableTemplateValidation: false
+          Info:
+            LoadTemplateFromURL:
+              "Fn::Sub": "${RepoRootURL}/sc-artifact.yml"
+          Name: v1
+  ProductAssociation:
+    Type: "AWS::ServiceCatalog::PortfolioProductAssociation"
+    Properties:
+      PortfolioId:
+        Ref: PortfolioId
+      ProductId:
+        Ref: ScProduct
+  LaunchPermissionConstraint:
+    Type: "AWS::ServiceCatalog::LaunchRoleConstraint"
+    DependsOn: ProductAssociation
+    Properties:
+      PortfolioId:
+        Ref: PortfolioId
+      ProductId:
+        Ref: ScProduct
+      RoleArn: !GetAtt StaticResources.Outputs.LaunchRoleArn
+      Description: "IAM role that AWS Service Catalog assumes when an end user launches the product"
+  StaticResources:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${RepoRootURL}/common-resources.yml"
